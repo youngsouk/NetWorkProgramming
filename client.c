@@ -16,6 +16,13 @@ typedef struct _client_t{
 	char chat; // '0' : off, '1': online , '2': chatting
 }client_t;
 
+typedef struct _uinfo{
+	char code[5];
+	char id[20];
+	char pw[20];
+	char nickname[20];
+}u_info;
+
 int main(int argc, char *argv[]){
 	int state;
 	int m_cast_rcv = socket(PF_INET, SOCK_DGRAM, 0);
@@ -23,9 +30,11 @@ int main(int argc, char *argv[]){
 	int tcp_server_socket = socket(PF_INET, SOCK_STREAM, 0);
 	int tcp_client_socket = socket(PF_INET, SOCK_STREAM, 0);
 	int tcp_server_socket2 = -1; //accept()로 생성되는 소켓 저장
+	int info_socket = socket(PF_INET, SOCK_DGRAM, 0); //INFO 명령어용
+	int login_socket = socket(PF_INET, SOCK_DGRAM, 0); //LOGIN 명령어용
 
 	struct sockaddr_in chat_server_addr; // chat tcp - server
-	struct sockaddr_in chat_client_addr; // chat tcp - clientㅜ
+	struct sockaddr_in chat_client_addr; // chat tcp - client
 	struct sockaddr_in chat_server_addr2; // chat tcp - accept()로 받는 클라이언트 정보
 	int first_connect = 0; //tcp 채팅 최초 연결
 	int sock_struct_len = sizeof(chat_server_addr2); //accept()용 크기 저장 변수
@@ -36,13 +45,22 @@ int main(int argc, char *argv[]){
 	int chat_m_port = 0; // chat manager IP
 
 	client_t client;
+	client_t client_list[10]; // INFO 명령어용 배열
+	char my_nick_name[20] = "unknown";
+	char login = 0; // 0 : logout 1 : login
 
 	struct sockaddr_in udp_serv_adr; //udp
+	struct sockaddr_in udp_info_adr; //udp_info
+	struct sockaddr_in udp_info_r_adr; //udp_info recv
+	struct sockaddr_in udp_login_adr; //udp_login
+	struct sockaddr_in udp_login_r_adr; //udp_login recv
+	int udp_info_r_adr_sz = sizeof(udp_info_r_adr);
 
 	int stdin_no = fileno(stdin); // stdin
 	char u_input[BUF_SIZE]; // user input
 
 	char * tmp; // sttok tmp
+	char * tmp2; // sttok tmp
 
 	int maxfd;
 	fd_set readfds, read_tmp;
@@ -51,6 +69,7 @@ int main(int argc, char *argv[]){
 	int str_len;
 	char buf[BUF_SIZE];
 
+	setvbuf(stdout, NULL, _IONBF, 0); 
 	if(argc!=4) {
 	    printf("Usage : %s <ip> <port> <학번>\n", argv[0]);
 	    exit(1);
@@ -107,7 +126,7 @@ int main(int argc, char *argv[]){
 	FD_SET(tcp_server_socket, &readfds);
 
 	read_tmp = readfds;
-	maxfd = tcp_client_socket;
+	maxfd = login_socket;
 
 	memset(&client, 0, sizeof(client)); //clent 정보 셋팅
 	strcpy(client.ip, argv[1]);
@@ -193,7 +212,7 @@ int main(int argc, char *argv[]){
             			continue;
             		}
             		// printf("채팅 연결 받음\n");
-            		printf("채팅 : %s", buf);
+            		printf("%s", buf);
             	}
             	if(FD_ISSET(tcp_client_socket, &readfds)){
 
@@ -216,17 +235,55 @@ int main(int argc, char *argv[]){
             			readfds = read_tmp;
             			continue;
             		}
-            		printf("채팅 : %s", buf);
+            		printf("%s", buf);
             	}
             	if(FD_ISSET(stdin_no, &readfds)){
             		memset(u_input, 0, sizeof(u_input));
             		fgets(u_input, BUF_SIZE, stdin);
             		tmp = strtok(u_input, " ");
             		if(strcmp(tmp, "CMD") == 0){
-            			printf("CMD MODE\n");
+            			// printf("CMD MODE\n");
             			tmp = strtok(0, " ");
-            			if(strcmp(tmp, "info") == 0){
-            				//info 정보 얻어오기
+            			// printf("%d\n", strcmp(tmp, "INFO\n") == 0);
+            			if(strcmp(tmp, "INFO\n") == 0){
+            				memset(&udp_info_adr, 0, sizeof(udp_info_adr));
+            				udp_info_adr.sin_family = AF_INET;
+		            		udp_info_adr.sin_port = htons(chat_m_port + 1);
+		            		udp_info_adr.sin_addr.s_addr = inet_addr(chat_m_ip);
+		            		// printf("%s %d\n", chat_m_ip, chat_m_port + 1);
+
+		            		if(-1 == connect(info_socket, (struct sockaddr*) &udp_info_adr, sizeof(udp_info_adr))){
+		            			printf("UDP command server connect error\n");
+		            			close(hb_sock);
+		            			exit(1);
+		        			}
+
+		        			// printf("CONNECT success\n");
+		        			memset(buf, 0, sizeof(buf));
+		        			// printf("heart beat send\n");
+		            		str_len = sendto(info_socket, "INFO", 4, 0, (struct sockaddr *)&udp_info_adr, udp_info_r_adr_sz);
+		            		// printf("SEND info cmd success\n");
+		            		str_len = recvfrom(info_socket,buf, BUF_SIZE -1, 0, (struct sockaddr *)&udp_info_r_adr, &udp_info_r_adr_sz);
+		            		// printf("recv success \n");
+		            		memcpy((char*)client_list, buf, sizeof(client_list));
+		            		// printf("%d recv\n", str_len);
+
+		            		// printf("recv client info success");
+
+		            		printf("------------------------------------------------\n");
+
+			            	for(int i = 0; i < 10; i++){
+			            		memset(buf, 0, sizeof(buf));
+			            		if(client_list[i].code[0] != 0){
+			            			if(client_list[i].chat == '0') sprintf(buf, "[%d] 학번 : %s ip : %s status : %s \n", i, client_list[i].code, client_list[i].ip, "offline");
+			            			else if(client_list[i].chat == '1') sprintf(buf, "[%d] 학번 : %s ip : %s status : %s \n", i, client_list[i].code, client_list[i].ip, "online");
+			            			else if(client_list[i].chat == '2') sprintf(buf, "[%d] 학번 : %s ip : %s status : %s \n", i, client_list[i].code, client_list[i].ip, "chatting");
+			            			printf("%s",buf);
+			            		}
+			            	}
+			            	printf("------------------------------------------------\n");
+
+
             			}
             			if(strcmp(tmp, "QUIT\n") == 0){
             				printf("QUIT\n");
@@ -239,14 +296,31 @@ int main(int argc, char *argv[]){
             			}
             		}
             		else if(strcmp(tmp, "CONNECT") == 0){
+            			/*
+            			if(login == 0) {
+            				fflush(stdout);
+            				printf("로그인을 먼저해주세요!\n");
+            				break;
+            			}
+            			*/
             			// printf("connect MODE\n");
-            			tmp = strtok(0, " ");
-            			tmp[strlen(tmp)-1] = 0;
+            			if(*(tmp + 8) == '['){
+            				int index = atoi(tmp + 9);
+            				if(*client_list[index].ip == 0){
+            					printf("잘못된 index입니다.\n");
+            					break;
+            				}
+            				chat_client_addr.sin_addr.s_addr = inet_addr(client_list[index].ip);
+            				printf("%s\n", client_list[index].ip);
+            			}
+            			else{
+            				tmp = strtok(0, " ");
+	            			tmp[strlen(tmp)-1] = 0;
+	            			chat_client_addr.sin_addr.s_addr = inet_addr(tmp);
+            			}
             			chat_client_addr.sin_family = AF_INET;
-            			chat_client_addr.sin_addr.s_addr = inet_addr(tmp);
-            			
             			chat_client_addr.sin_port = htons(atoi(argv[2]));
-            			printf("connect to : %s port : %d\n", tmp, atoi(argv[2]));
+            			// printf("connect to : %s port : %d\n", tmp, atoi(argv[2]));
             			
             			if(connect(tcp_client_socket, (struct sockaddr*) &chat_client_addr, sizeof(chat_client_addr)) == -1){
             				perror("connect error\n");
@@ -289,16 +363,63 @@ int main(int argc, char *argv[]){
             				printf("누구와도 연결이 안되었습니다.\n");
             				continue;
             			} 
-            			if(is_server == 0) write(tcp_client_socket, tmp, strlen(tmp));
+            			if(is_server == 0) {
+            				memset(buf, 0, sizeof(buf));
+            				sprintf(buf, "%s : %s", my_nick_name, tmp);
+            				write(tcp_client_socket, buf, strlen(buf));
 
-            			if(is_server == 1) write(tcp_server_socket2, tmp, strlen(tmp));
+            			}
+
+            			if(is_server == 1) {
+            				memset(buf, 0, sizeof(buf));
+            				sprintf(buf, "%s : %s", my_nick_name, tmp);
+            				write(tcp_server_socket2, buf, strlen(buf));
+            			}
             		}
+            		else if(strcmp(tmp, "LOGIN") == 0){
+            			if(login == 1) break;
+            			printf("로그인 시도 중...\n");
+            			memset(buf, 0, sizeof(buf));
+            			tmp = strtok(0," ");
+            			tmp2 = tmp + strlen(tmp) + 1;
+            			tmp2[strlen(tmp2) - 1] = 0;
+            			sprintf(buf, "%s %s %s ", argv[3],tmp, tmp2);
+            			// printf("%s\n", buf);
+
+            			memset(&udp_login_adr, 0, sizeof(udp_login_adr));
+        				udp_login_adr.sin_family = AF_INET;
+	            		udp_login_adr.sin_port = htons(chat_m_port + 2);
+	            		udp_login_adr.sin_addr.s_addr = inet_addr(chat_m_ip);
+
+	            		if(-1 == connect(login_socket, (struct sockaddr*) &udp_login_adr, sizeof(udp_login_adr))){
+	            			printf("UDP login server connect error\n");
+	            			close(hb_sock);
+	            			exit(1);
+	        			}
+
+	        			// printf("CONNECT success\n");
+	            		str_len = sendto(login_socket, buf, strlen(buf), 0, (struct sockaddr *)&udp_login_adr, udp_info_r_adr_sz);
+	            		// printf("SEND LOGIN cmd success\n");
+	            		memset(buf, 0, sizeof(buf));
+	            		str_len = recvfrom(login_socket,buf, BUF_SIZE -1, 0, (struct sockaddr *)&udp_login_r_adr, &udp_info_r_adr_sz);
+	            		// printf("recv success \n");
+	            		if(strncmp(buf, "fail", 4) == 0) printf("Login Fail\n");
+	            		else {
+	            			// printf("%s\n", buf);
+	            			printf("%s님 환영합니다. \n", buf + 8);
+	            			strcpy(my_nick_name, buf + 8);
+	            			login = 1;
+	            		}
+
+            		}
+            		
             		/**/
             		else if(strcmp(tmp, "DEBUG\n") == 0){
             			printf("is_server : %d \n", is_server);
             			printf("client.chat : %d \n", client.chat);
             			printf("first_connect : %d \n", first_connect);
             			printf("maxfd : %d \n", maxfd);
+            			printf("login : %d \n", login);
             		}
 
             		else{
